@@ -2,7 +2,6 @@ package com.homeofcode.wifidirectservicedescoveryviewer
 
 import android.Manifest
 import android.content.pm.PackageManager
-import android.net.wifi.p2p.WifiP2pDevice
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -33,7 +32,9 @@ import androidx.compose.ui.unit.dp
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.homeofcode.wifidirectservicedescoveryviewer.ui.theme.WifiDirectServiceDescoveryViewerTheme
+import java.net.InetAddress
 import java.net.ServerSocket
+import java.net.Socket
 
 class MainActivity : ComponentActivity() {
     private lateinit var wifiDirectHelper: WiFiDirectHelper
@@ -42,7 +43,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         wifiDirectHelper = WiFiDirectHelper(this)
-
+        wifiDirectHelper.setConnectCallback({i -> connected(i)})
         requestNecessaryPermissions()
 
         setContent {
@@ -52,6 +53,30 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun connected(ip: InetAddress) {
+        Toast.makeText(this, "Connecting to ${ip}", Toast.LENGTH_SHORT).show()
+        Thread {
+            try {
+                val client = Socket(ip, 8888)
+                client.getOutputStream().write("Hello from client".toByteArray())
+                val input = client.getInputStream()
+                val buffer = ByteArray(1024)
+                val bytesRead = input.read(buffer)
+                if (bytesRead > 0) {
+                    val receivedData = String(buffer, 0, bytesRead)
+                    runOnUiThread {
+                        Toast.makeText(this, "Received data: $receivedData", Toast.LENGTH_SHORT).show()
+                    }
+                    Toast.makeText(this, "Received data: $receivedData", Toast.LENGTH_SHORT).show()
+                }
+                client.close()
+            } catch (e: Exception) {
+                runOnUiThread {
+                    Toast.makeText(this, "Error connecting to ${ip}: ${e}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }.start()
+    }
     private fun requestNecessaryPermissions() {
         val requiredPermissions = arrayOf(
             Manifest.permission.ACCESS_FINE_LOCATION,
@@ -75,6 +100,9 @@ class MainActivity : ComponentActivity() {
             var ad = ServerSocket(8888)
             while (!Thread.currentThread().isInterrupted) {
                 try {
+                    runOnUiThread() {
+                        Toast.makeText(this, "Server socket started", Toast.LENGTH_SHORT).show()
+                    }
                     val client = ad.accept()
                     val input = client.getInputStream()
                     val output = client.getOutputStream()
@@ -82,8 +110,10 @@ class MainActivity : ComponentActivity() {
                     val bytesRead = input.read(buffer)
                     if (bytesRead > 0) {
                         val receivedData = String(buffer, 0, bytesRead)
-                        Toast.makeText(this, "Received data: $receivedData", Toast.LENGTH_SHORT)
-                            .show()
+                        runOnUiThread() {
+                            Toast.makeText(this, "Received data: $receivedData", Toast.LENGTH_SHORT)
+                                .show()
+                        }
                         output.write("Hello from server".toByteArray())
                     }
                     client.close()
@@ -91,9 +121,14 @@ class MainActivity : ComponentActivity() {
                     break
                 } catch (e: Exception) {
                     e.printStackTrace()
+                } finally {
+                    runOnUiThread() {
+                        Toast.makeText(this, "Server socket closed", Toast.LENGTH_SHORT).show()
+                    }
                 }
             }
         }
+        accepterThread?.start()
         wifiDirectHelper.registerReceiver()
     }
 
@@ -108,29 +143,25 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun WiFiDirectScreen(wifiDirectHelper: WiFiDirectHelper) {
-    fun connectToService(defice: WifiP2pDevice) {
-        wifiDirectHelper.connectToDevice
-    }
-
     var status by remember { mutableStateOf("Status: Idle") }
     val discoveredServices = remember { mutableStateMapOf<WiFiDirectHelper.HelperServiceInfo, WiFiDirectHelper.HelperServiceInfo>() }
     val txtDiscoveredRecords = remember { mutableStateMapOf<WiFiDirectHelper.HelperDnsServiceInfo, WiFiDirectHelper.HelperDnsServiceInfo>() }
 
     wifiDirectHelper.setCallbacks(
-        discoveryCallback = {
+        {
             status = "Discovery active: ${wifiDirectHelper.discovering}"
         },
-        serviceDiscoveryCallback = {
+        {
             wifiDirectHelper.discoveredServices.forEach { service ->
                 discoveredServices[service] = service
             }
         },
-        txtRecordListener = {
+        {
             wifiDirectHelper.discoveredDnsServices.forEach { service ->
                 txtDiscoveredRecords[service] = service
             }
         },
-        wifiStateListener = {
+        {
             status = "Wifi active: ${wifiDirectHelper.wifiManagerActive}"
         },
     )
@@ -178,7 +209,7 @@ fun WiFiDirectScreen(wifiDirectHelper: WiFiDirectHelper) {
                         .fillMaxWidth()
                         .padding(vertical = 4.dp),
                     onClick = {
-                      connectToService(service.device)
+                      wifiDirectHelper.connectToDevice(service.device)
                     },
                     elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                 ) {
@@ -202,7 +233,7 @@ fun WiFiDirectScreen(wifiDirectHelper: WiFiDirectHelper) {
                         .fillMaxWidth()
                         .padding(vertical = 4.dp),
                     onClick = {
-                        connectToService(service)
+                        wifiDirectHelper.connectToDevice(service.device)
                     },
                     elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
                 ) {
